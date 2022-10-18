@@ -1,0 +1,209 @@
+---
+title: "Estudio sobre la fuga de clientes en una compañía telefónica"
+author: "Hassan Chafi Xavier"
+date: "28/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preparación de las herramientas de trabajo.
+Lo primero que se debe comenzar haciendo es fijar el directorio de trabajo de nuestra máquina local de donde se cargarán las funciones que se harán uso así como instalar/cargar las librerías de R que se utilizarán.
+
+```{r cars, warning=FALSE, results='hide', message=FALSE}
+# Fijar el directorio de trabajo
+setwd("C:/Users/96has/Documents/NTIC/6. Documentación minería de Datos y Modelización Predictiva-20211212")
+
+# Cargar las funciones
+source("Funciones_R.R")
+
+# Instalar/cargar las librerías de R
+paquetes(c("questionr", "psych", "car", "corrplot", "ggplot2", "gridExtra", "kableExtra", "dplyr", "DMwR2"))
+```
+
+## Lectura e inspección de datos. Tipo de variables, distribuciones, valores extraños, etc.
+Esta primera fase constará de la lectura del archivo de datos y su inspección para observar los tipos de variables, las distribuciones que tienen las variables y determinar la presencia de valores outliers y missings.
+
+```{r}
+# Lectura del archivo de datos.
+datos <- readRDS("C:/Users/96has/Documents/NTIC/6. Documentación minería de Datos y Modelización Predictiva-20211212/Tarea/FugaClientes_Training.RDS")
+```
+
+```{r}
+# Observamos los detalles de las variables
+str(datos)
+```
+
+Lo primero que se observa en este punto es que la variable ID está considerada como un factor, un aspecto que se ha de solucionar puesto que es una variable que no aporta valor en el modelado de los datos. También se va a proceder a recodificar las variables dicotómicas que adoptan los valores 'Yes'/'No' por dos valores numéricos que representen estos valores anteriores.
+
+Profundizando en las variables del archivo de datos se puede apreciar la distribución que tienen los valores de las variables donde, en cuanto a las variables continuas, ya se puede comenzar a sospechar de la presencia de valores extraños, entendiendo por 'extraños' la presencia de valores atípicos o outliers.
+
+```{r}
+# Observamos a detalle los valores de las variables
+summary(datos)
+```
+
+El caso de la variable **FacturaTotal** llama la atención puesto que los valores de su media y su mediana son muy distantes entre si siendo la media muy superior a la mediana; esto hace sospechar de la presencia de outliers ya que pueden existir valores muy a la derecha que hagan este efecto de arrastre de la media hacia la derecha adoptando este valor tan elevado y superior a la mediana.
+
+La representación gráfica de la variable **FacturaTotal** ayuda a conocer más en detalle su distribución pudiendo detectar la presencia de estos outliers.
+
+```{r}
+# Boxplot variable FacturaTotal
+boxplot(datos$FacturaTotal, main = "Importe facturado total")
+```
+
+Tras la representación del boxplot de la variable **FacturaTotal** se puede observar que no se aprecian outliers en la variable.
+
+En cuanto a las variables numéricas que pudieran ser consideradas como categóricas, se considerarán numéricas si tienen más de diez valores distintos, con el objetivo de no consumir excesivamente números de parámetros del modelo.
+
+```{r}
+# Observamos los valores distintos que tienen las variables numéricas del archivo de datos
+sapply(Filter(is.numeric, datos), FUN = function(x) length(unique(x)))
+```
+
+Se puede confirmar la presencia de missings en el archivo de datos mediante la siguiente consulta para la cual se devuelve un valor booleano TRUE que indica la presencia de dichos valores en las variables.
+
+```{r}
+# Consulta de la existencia de missings en el archivo de datos
+any(is.na(datos))
+```
+
+## Corrección de errores detectados.
+Los errores que se han detectado hasta este punto y que se va a proceder a su corrección son:
+
+- La variable **ID** que está considerada como un factor, se cambiará a un tipo de variable character para que no dé problemas a la hora de trabajar con las variables consideradas como factor y que aportan verdadero valor al modelo.
+- A las variables **Conyuge**, **PersCargo**, **Telf_serv**, **VariasLineas**, **Seguridad**, **CopiaSeguridad**, **Antivirus_disp**, **Soporte_tecnico**, **TV_streaming**, **Peliculas** y **Fact_sinPapel** que son variables dicotómicas que adoptan los valores 'Yes'/'No' se representará los valores 'Yes' por un 1 y los valores 'No' por un 0
+
+```{r}
+# Modificación del tipo de variable de ID 
+datos$ID <- as.character(datos$ID)
+```
+
+```{r}
+#Recodificación de los valores de las variables dicotómicas
+datos$Conyuge <- car::recode(datos$Conyuge, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$PersCargo <- car::recode(datos$PersCargo, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Telf_serv <- car::recode(datos$Telf_serv, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$VariasLineas <- car::recode(datos$VariasLineas, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Seguridad <- car::recode(datos$Seguridad, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$CopiaSeguridad <- car::recode(datos$CopiaSeguridad, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Antivirus_disp <- car::recode(datos$Antivirus_disp, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Soporte_tecnico <- car::recode(datos$Soporte_tecnico, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$TV_streaming <- car::recode(datos$TV_streaming, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Peliculas <- car::recode(datos$Peliculas, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datos$Fact_sinPapel <- car::recode(datos$Fact_sinPapel, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+```
+
+Voy a comprobar la frecuencia de aparición de los valores de las variables categóricas para realizar una reflexión de si se debería unificar categorías dentro de estas variables.
+
+```{r}
+# Comprobación de la frecuencia de aparición de los valores de las variables categóricas
+lapply(Filter(is.factor, datos), FUN = freq)
+```
+
+Como se ha podido observar, algunas variables que se podrían haber modificado como **Int_serv**, **Contrato** y **MetodoPago** tienen unos valores muy representativos, todos superiores al 20% en cuanto a representación, por lo que podemos considerar conveniente mantener estas variables como vienen definidas para que sus valores no adopten un carácter genérico.
+
+Una vez realizada esta lectura de los datos, haber estudiado el tipo de las variables comprobando sus distribuciones y unificando algunos de sus valores; se procede al tratamiento de los outliers y los missings para finalizar la adecuada depuración de los datos.
+
+Antes de ello, se observa los detalles de las variables del archivo de datos para comprobar que las modificaciones se han realizado correctamente y que no existan variables categóricas con valores poco representados.
+
+```{r}
+# Observamos los detalles de las columnas del archivo de datos
+str(datos)
+```
+
+## Tratamiento de outliers.
+Para comenzar a tratar los outliers y, posteriormente los missings, se separarán las variables predictoras de la variable objetivo.
+
+```{r}
+# Creación del DataFrame de variables predictoras
+varID <- datos$ID
+varObj <- datos$Fuga
+input <- as.data.frame(datos[ , -c(1, 21)]) # Descarto la variable ID y la variable objetivo
+```
+
+Una buena forma de seguir profundizando en la observación de la distribución de las variables continuas tras haberlas graficado en un boxplot y haber observado su media y mediana; es ver los valores que tienen la curtosis y la asimetría para dichas variables. De esta manera, llama la atención que la variable 'FacturaTotal' tenga un valor tan elevado en cuanto a su asimetría, es decir, su cola a la derecha es más larga que en la izquierda e indica valores positivos muy alejados de la media. Esto es una fuerte sospecha de la posible presencia de outliers en dicha variable pero no podemos asegurar realmente su existencia, por ello se va a valorar la incidencia de outliers por cada variable continua predictora.
+
+```{r}
+psych::describe(Filter(is.numeric, input))
+```
+
+Mediante el criterio seguido para determinar la presencia de outliers (criterio 3 sd + criterio de 3 IQR en las variables con distribuciones simétricas y el criterio del MAD con valor 8 + criterio de 3 IQR en las variables con distribuciones asimétricas), no se detecta presencia de ningún valor atípico en las variables continuas del dataframe de variables predictoras.
+
+```{r}
+# Tabla con porcentaje de outliers por variable
+outliersV <- data.frame(sort(
+  round(sapply(Filter(
+    is.numeric, input), function(nOut) atipicosAmissing(
+      nOut)[[2]]) / nrow(input) * 100, 3), decreasing = TRUE))
+names(outliersV) <- "% Outliers por variable"
+outliersV
+```
+
+## Tratamiento de missings.
+Empezar a analizar los valores missings de las variables requiere inicialmente conocer la existencia de patrones de coexistencia entre las distintas variables. La presencia de un patrón de coexistencia de missings entre dos variables querría decir que los registros del archivo de datos que tienen missings en una variable, lo tienden a tener también en la otra variable para la que existe dicho patrón de coexistencia. En el caso de este estudio, el diagrama indica que no existen patrones entre las variables por lo que podemos pasar a cuantificar el porcentaje de missings por cada una de las variables y considerar un criterio adecuado para su tratamiento. 
+
+```{r}
+corrplot(cor(is.na(input[colnames(input)[colSums(is.na(input)) > 0]])),method = "ellipse",type = "upper")
+```
+
+```{r}
+prop_missingsV <- apply(is.na(input), 2, mean) 
+
+# Tabla con porcentaje de missings por variable
+missingsV <- data.frame(sort(prop_missingsV * 100, decreasing = TRUE))
+names(missingsV) <- "% Missings por Variable"
+missingsV
+```
+
+Se procede a la imputación de los valores missings en las variables cuantitativas con el valor de la media de sus valores y las variables cualitativas con la moda.
+
+```{r}
+# Imputación de las variables cuantitativas
+input[ ,as.vector(which(sapply(input, class) == "numeric"))] <- sapply(Filter(is.numeric, input), 
+                                                                       function(x) ImputacionCuant(x, "media"))
+
+# Inputación de las variables cualitativas
+input[ ,as.vector(which(sapply(input, class) == "factor"))] <- sapply(Filter(is.factor, input), 
+                                                                      function(x) ImputacionCuali(x, "moda"))
+```
+
+```{r}
+# Las variables categóricas han pasado a ser de tipo character y hay que indicarle nuevamente que son de tipo factor
+input[, as.vector(which(sapply(input, class) == "character"))] <- lapply(input[ ,as.vector(which(sapply(input, class) == "character"))] , factor)
+```
+
+```{r}
+summary(input)
+```
+
+Observamos que aún hay dos variables numéricas que siguen teniendo missings, se resolverá volviendo a pasarle la función para el tratamiento de estos missings y posteriormente comprobaremos que se han imputado correctamente.
+
+```{r}
+# Aplico de nuevo la función para los missings
+if (any(is.na(input))){
+  input[ ,as.vector(which(sapply(input, class) == "numeric"))] <- sapply(
+  Filter(is.numeric, input), function(x) ImputacionCuant(x, "aleatorio"))
+  
+# Reviso que no queden missings
+summary(input)
+}
+```
+
+De esta manera, ya se puede afirmar que los datos se han depurado correctamente. Se puede hacer una inspección gráfica final para su visualización.
+
+```{r}
+# Graficar el Dataset
+par(mfrow = c(3,3))
+lista_his <- dfplot_his(input)
+gridExtra::marrangeGrob(lista_his, nrow=3, ncol=2)
+```
+
+Se puede afirmar que el proceso que involucra la depuración de los datos se ha finalizado adecuadamente por lo que a continuación se puede proceder a su almacenamiento.
+
+```{r}
+# Se guardan los datos
+saveRDS(cbind(varObj, input),"datosTelefoniaDep.RDS")
+```

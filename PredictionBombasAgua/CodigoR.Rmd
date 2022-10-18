@@ -1,0 +1,947 @@
+---
+title: "Estudio sobre el estado de funcionamiento de unas bombas de agua"
+author: "Hassan Chafi Xavier"
+date: "2/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## - Objetivo
+En el presente proyecto se estudia un conjunto que contiene datos sobre unas bombas de agua y se realiza un modelo sobre la variable **status_group** que revelerá el estado (funcionamiento, no funcionamiento o necesidad de reparación) de las bombas de agua.
+
+```{r, message=FALSE, results='hide', warning=FALSE}
+#Carga de librerías
+library(data.table)
+library(dplyr)
+library(caret)
+library(scales)
+library(ggplot2)
+library(stringi)
+library(stringr)
+library(dataPreparation)
+library(knitr)
+library(kableExtra)
+library(ggpubr)
+library(tictoc)
+library(ggeasy)
+library(lubridate)
+library(inspectdf)
+library(ranger)
+library(MLmetrics)
+library(DataExplorer)
+library(modeest)
+```
+
+## 1.Carga de datos
+A continuación se comienza cargando el conjunto de datos que contiene los datos de entrenamiento así como el conjunto de datos que contiene los datos relativos a la variable objetivo **status_group** que releva el estado de las bombas de aguas.
+
+```{r}
+#Carga de datos
+trainingV <- read.csv("TrainingSetValues.csv")
+trainingL <- read.csv("TrainingSetLabels.csv")
+```
+
+Se concatenan los DataFrames cargados anteriormente para unir, en el conjunto de entrenamiento, las variables predictivas con la variable objetivo.
+
+## 2.Exploración de datos
+
+```{r}
+#Concatenación del conjunto de entrenamiento y la variable objetivo
+data <- merge(trainingV, trainingL, by = "id")
+```
+
+Se observa que algunas observaciones tienen algunas de sus variables con los campos vacíos, como por ejemplo la variable **public_meeting** en la primera observación o la variable **scheme_management** en la segunda observación.
+
+```{r}
+#Primeras observaciones del conjunto de train
+head(data)
+```
+
+Los campos vacíos anteriormente vistos, se considerarán como valores missings o valores perdidos; pasarán a tener el valor NA.
+
+```{r}
+#Los campos vacíos serán NA's
+data[data == ""] <- NA
+```
+
+Se puede realizar una fase de exploración inicial del conjunto de los datos de entrenamiento en su totalidad para observar la frecuencia que tienen los valores dentro de las variables categóricas, la correlación entre las variables numéricas, los valores perdidos...
+
+```{r, warning=FALSE}
+#Exploración de los datos de train
+
+# Frecuencia de variables categóricas
+var_cat <- inspect_cat(data) 
+show_plot(var_cat)
+
+# Correlación de variables numéricas
+corr_num <- inspect_cor(data)
+show_plot(corr_num)
+
+# Porcentaje de frecuencia de valores en cariables categóricas
+por_cat <- inspect_imb(data)
+show_plot(por_cat)
+
+# Uso de memoria
+mem_var <- inspect_mem(data)
+show_plot(mem_var)
+
+# Valores perdidos
+miss_var <- inspect_na(data)
+show_plot(miss_var)
+
+# Histogramas de variables numéricas
+hist_num <- inspect_num(data)
+show_plot(hist_num)
+
+# Tipo de variables 
+tip_var <- inspect_types(data)
+show_plot(tip_var)
+```
+
+A continuación, se observa el porcentaje de aparición que tienen los distintos valores que puede adoptar la variable objetivo. Como se puede ver, no se trata de una variable binaria donde se tiene dos distintos valores; en este caso, se tienen hasta tres distintos posibles valores dentro de la variable objetivo.
+
+```{r}
+#Conocer el balanceo de la variable objetivo
+round(prop.table(table(data$status_group)) * 100, 2)
+```
+
+Con el objetivo de tener un primer modelo que sirva de base para mejorarlo posteriormente mediante la adicción de más variables y realizando técnicas de feature engineering; se trabajará sobre un conjunto de entrenamiento que únicamente contengan las variables numéricas.
+
+```{r}
+#Copia del DataFrame de train seleccionando únicamente las numéricas
+dataNum <- copy(data)
+dataNum <- data %>% select_if(is.numeric)
+dataNum$status_group <- data$status_group
+
+#Paso a tipo factor la variable objetivo y elimino la variable id ya que no aporta valor al modelado
+dataNum$status_group <- as.factor(dataNum$status_group)
+dataNum$id <- NULL
+```
+
+Con la ayuda de la libreria de **DataExplorer** se puede realizar una exploración de los datos de este conjunto de variables numéricas creado para construir unas bases sobre las que mejorar el modelo predictivo.
+
+```{r}
+#Exploración del conjunto de datos de variables numéricas
+plot_str(dataNum) #Estructura de las variables
+introduce(dataNum) #Información básica del conjunto de datos
+plot_intro(dataNum) #Estado de los datos
+plot_missing(dataNum) #Valores perdidos en los datos
+plot_correlation(dataNum) #Correlación entre las variables
+```
+
+### Partición train-test
+Uno de los pasos previos a la fase de modelado, es la partición del conjunto de datos en dos subconjuntos: uno de entrenamiento con el que se obtendrán los distintos modelos y otro de test con el que se evaluarán los modelos. El 80% de las observaciones del conjunto de datos será para entrenar los modelos y el 20% será para la evaluación de los modelos.
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(dataNum$status_group, p = 0.8, list = FALSE)
+
+my_test  <- dataNum[-validationIndex,]
+my_train <- dataNum[validationIndex,]
+```
+
+### Modelo lineal
+Dado que la variable objetivo que se tiene (**status_group**) es una variable que tiene más de dos valores distintos (no es una variable dicotómica); el primer modelo que se entrenará será un modelo lineal, concretamente una regresión logística multinomial que ayuda a generalizar el método de regresión logística a problemas multiclase como en el que nos encontramos dadas las posibles situación de funcionamiento de las bombas de agua.
+
+```{r, warning=FALSE,message=FALSE,results='hide'}
+#Construcción del modelo
+trainControl <- trainControl(
+                             method="cv", 
+                             number=3, 
+                             classProbs=TRUE,
+                             summaryFunction=defaultSummary
+                            )
+set.seed(123)
+fitMulti <- train( 
+             make.names(status_group)~., 
+             data = my_train, 
+             method="multinom", 
+             metric="ROC",
+             trControl=trainControl
+            )
+```
+
+Al observar los resultados del modelo, ya se puede entrever que no será un modelo que se ajuste bien ya que el valor del Accuracy es próximo a 0.5, un valor que se traduce en una escasa capacidad del modelo a la hora de clasificar correctamente; asimismo, el valor Kappa (alrededor de 0.05) es muy pobre (un valor Kappa muy bueno sería a partir de 0.8).
+
+```{r}
+#Resultados del modelo
+print(fitMulti)
+
+#Resultados del modelo
+summary(fitMulti)
+```
+
+Ya en la matriz de confusión se puede observar que el modelo es incapaz de reconocer bombas de agua cuyo valor en la variable objetivo **status_group** es igual a **functional needs repair**.
+
+```{r}
+#Evaluación del modelo
+predictions <- predict(fitMulti, newdata = my_test)
+table(my_test$status_group, predictions)
+```
+
+```{r}
+#Realizo las predicciones (modelo lineal)
+testV <- read.csv("TestSetValues.csv")
+testValues <- copy(testV)
+
+pred <- predict(fitMulti, testValues)
+id <- as.data.frame(testValues$id)
+status_group <- as.data.frame(pred)
+my_pred <- cbind(id, status_group)
+colnames(my_pred) <- c("id", "status_group")
+write.csv(my_pred, "Predict.csv", row.names = FALSE)
+```
+
+### Modelo no lineal
+El siguiente modelo que se entrena es un modelo no lineal mediante la función **ranger** que se trata de una implementación rápida de random forest. Inicialmente se realiza con 100 árboles, pero posteriormente se verán métodos para optimizar el número de árboles con el objetivo de mejorar los resultados del modelo.
+
+```{r}
+#Construcción del modelo
+fitR <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+A continuación, en los resultados del modelo se puede ver una previsión de error del 29,46%.
+
+```{r}
+#Resultados del modelo
+print(fitR)
+
+#Resultados del modelo
+summary(fitR)
+```
+
+Una vez evaluado el modelo, se obtiene un Accuracy del 0.707
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+Una vez obtenido distintos resultados para el conjunto de datos únicamente con las variables numéricas con distintos algorítmos; se procederá a continuación a incluir más variables en el conjunto de datos e, incluso, elimnar variables que no sean relevantes para la explicabilidad de la variable objetivo. Para ello, se entrenará el modelo con el algoritmo de la función **ranger** ya que es el algoritmo que mejores resultados ha proporcionado de las dos implementaciones anteriores.
+
+Se observa a continuación la importancia de las variables en el modelo y se aprecia que la importancia de la variable **num_private** es muy baja, por lo que se podría eliminar del modelo.
+
+```{r}
+# Importancia de las variables 
+vars_imp <- fitR$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(dataNum) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+A continuación se incluirá en el modelo la variable **date_recorded**, para ello, previamente se comprueba si existenten valores perdidos en la variable.
+
+```{r}
+#Comprobación de NA´s en la variable
+any(is.na(data$date_recorded))
+```
+
+Como no existen valores perdidos en la variable, se procede a incluirla en el nuevo conjunto de datos donde se eliminarán las variables **id** ya que no aporta valor y la variable **num_private** que anteriormente se comprobó que tiene poca capacidad de influencia sobre la respuesta.
+
+```{r}
+#Construcción del nuevo conjunto de entrenamiento
+data_1 <- cbind(select_if(data, is.numeric), date_recorder = data$date_recorded)
+data_1$status_group <- as.factor(data$status_group)
+data_1$id <- NULL
+data_1$num_private <- NULL
+```
+
+Sobre la nueva variable incluida en el conjunto de entrenamiento se podría realizar una serie de modificaciones que den lugar a la creación de nuevas variables. También se puede crear una nueva variable llamada **distancia** a partir de las variables **longitud** y **latitud**.
+
+```{r}
+#Creación de nuevas variables
+data_1$anyo    <- year(data_1$date_recorder)
+data_1$mes     <- month(data_1$date_recorder)
+data_1$dia     <- day(data_1$date_recorder)
+data_1$distancia <- sqrt((data_1$longitude ^ 2) + (data_1$latitude ^ 2))
+
+data_1$date_recorder <- NULL
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_1$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_1[-validationIndex,]
+my_train <- data_1[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR1 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+Se observa una mejora respecto al conjunto de entrenamiento inicial ya que se pasa de un Accuracy de 0.707 a 0.727
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR1, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r}
+# Importancia de las variables 
+vars_imp <- fitR1$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(data_1) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+Como se ha visto anteriormente, la variable **anyo** es una variable que aporta poca influencia sobre la respuesta, por lo que se podría plantear su eliminación del conjunto de datos. 
+
+```{r}
+#Construcción del nuevo conjunto de entrenamiento
+data_2 <- copy(data_1)
+data_2$anyo <- NULL
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_2$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_2[-validationIndex,]
+my_train <- data_2[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR2 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR2, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r}
+# Importancia de las variables 
+vars_imp <- fitR2$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(data_2) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+A continuación, se crea un nuevo conjunto de entrenamiento en el que se introducen las variables categóricas. Se observa que hay variables categóricas que tienen valores perdidos, por lo que es necesario la imputación de esos datos.
+
+```{r, warning=FALSE}
+#Missing en variables categóricas
+miss_var_chr <- inspect_na(select_if(data, is.character))
+show_plot(miss_var_chr)
+```
+
+Un método para imputar los valores NA´s en variables categóricas es mediante su moda. La variable que más valores NA´s tiene es **scheme_name** con un 47.4% de valores faltantes; esta situación junto con el hecho de que tiene hasta 2697 valores distintos, podría ser una buena razón para no considerar esta variable en el modelado.
+
+```{r}
+#Valores únicos de scheme_name
+length(unique(data$scheme_name))
+```
+
+Posteriormente, se encuentran las variables **scheme_management**, **installer**, **funder**, **public_meeting**, **permit** y **subvillage** que tienen una proporción menor de NA's por lo que se estudiará a continuación la imputación de sus valores faltantes.
+
+```{r}
+#Moda de la variable scheme_management
+mlv(data$scheme_management)
+
+#Moda de la variable installer
+mlv(data$installer)
+
+#Moda de la variable funder
+mlv(data$funder)
+
+#Moda de la variable public_meeting
+mlv(data$public_meeting)
+
+#Moda de la variable permit
+mlv(data$permit)
+
+#Moda de la variable subvillage
+mlv(data$subvillage)
+```
+
+Se observa que la variable **subvillage** tiene como moda sus valores perdidos (NA's), se consulta cuantos valores distintos tiene la variable y se obtiene que hasta 19288 valores; por lo que no se considerará tampoco para el modelado de datos.
+
+```{r}
+#Valores distintos de la variable subvillage
+length(unique(data$subvillage))
+```
+
+```{r}
+#Imputación de NA´s en la variable scheme_management
+data$scheme_management[is.na(data$scheme_management)] <- "VWC"
+
+#Imputación de NA´s en la variable installer
+data$installer[is.na(data$installer)] <- "DWE"
+
+#Imputación de NA´s en la variable funder
+data$funder[is.na(data$funder)] <- "Government Of Tanzania"
+
+#Imputación de NA´s en la variable public_meeting
+data$public_meeting[is.na(data$public_meeting)] <- "True"
+
+#Imputación de NA´s en la variable permit
+data$permit[is.na(data$permit)] <- "True"
+```
+
+```{r}
+#Construcción del conjunto de entrenamiento
+dataChr <- select_if(data, is.character)
+dataChr$status_group <- as.factor(dataChr$status_group)
+#Eliminación de variables que no se considerarán en el modelado
+dataChr$scheme_name <- NULL
+dataChr$subvillage <- NULL
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(dataChr$status_group, p = 0.8, list = FALSE)
+
+my_test  <- dataChr[-validationIndex,]
+my_train <- dataChr[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR3 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+Tal como se puede apreciar, este modelo únicamente con las variables categóricas obtiene un valor de Accuracy del 0.770
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR3, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r}
+# Importancia de las variables 
+vars_imp <- fitR3$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(dataChr) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+A continuación se eliminan las variables con escasa capacidad de influencia como se ha visto anteriormente con la variable **recorded_by**.
+
+```{r}
+#Construcción del conjunto de entrenamiento
+data_4 <- copy(dataChr)
+data_4$recorded_by <- NULL
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_4$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_4[-validationIndex,]
+my_train <- data_4[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR4 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+La eliminación de la variable **recorded_by** ha supuesto una mejora del valor del Accuracy pasando del 0.770 al 0.772
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR4, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r, warning=FALSE}
+# Importancia de las variables 
+vars_imp <- fitR4$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(data_4) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+En este punto, se podría crear un nuevo conjunto con las variables numéricas ya tratadas y las variables categóricas ya tratadas.
+
+```{r}
+#Construcción del nuevo conjunto de entrenamiento con todas las variables
+data_5 <- cbind(select_if(data_2, is.numeric), data_4) #Filtro en el primer conjunto para no obtener dos veces la variable objetivo
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_5$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_5[-validationIndex,]
+my_train <- data_5[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR5 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+Se obtiene un valor de Accuracy del 0.806 que es un valor bastante bueno ya que se encuentra por encima de 0.8
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR5, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r, warning=FALSE}
+# Importancia de las variables 
+vars_imp <- fitR5$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(data_5) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+Al observar el conjunto de los datos, se observan variables que tienen nombres similares y que incluso adoptan los mismos valores. Se va a observar esta circunstancia mediantes tablas de contingencia.
+
+```{r}
+#Tabla de contingencia payment-payment_type
+prop.table(table(data_5$payment, data_5$payment_type))
+```
+
+```{r}
+#Construcción del nuevo conjunto de entrenamiento
+data_6 <- copy(data_5)
+data_6$payment_type <- NULL
+```
+
+Se puede tramificar algunas variables numéricas con el objetivo de encontrar puntos de corte que revelen información relevante en la predicción de la variable objetivo. En este caso, se tramifican las variables **latitude** y **longitude**.
+
+```{r}
+#Tramificación de la variable latitude
+tree_lat <- rpart::rpart(status_group ~ latitude, data = data_6, cp = 0.005)
+tree_lat
+
+data_6$tree_lat <- factor(tree_lat$where)
+levels(data_6$tree_lat) = c('(-8.948985)-(-10.93532)', '>=(-4.8418)', '(-6.284119)-(-8.948985)', '(-6.284119)-(-4.8418)','<(-10.93532)', '(-10.93532)-(-9.90583)')
+```
+
+```{r}
+#Ordenación de los factores en la variable tree_lat
+data_6$tree_lat <-factor(data_6$tree_lat, levels = c('(-8.948985)-(-10.93532)', '>=(-4.8418)', '(-6.284119)-(-8.948985)', '(-6.284119)-(-4.8418)','<(-10.93532)', '(-10.93532)-(-9.90583)'))
+table(data_6$tree_lat)
+```
+
+```{r}
+#Tramificación de la variable longitude
+tree_long <- rpart::rpart(status_group ~ longitude, data = data_6, cp = 0.005)
+tree_long
+
+data_6$tree_long <- factor(tree_long$where)
+levels(data_6$tree_long) = c('<37.50894','37.50894-38.50322', '>=38.50322')
+```
+
+```{r}
+#Ordenación de los factores en la variable tree_long
+data_6$tree_long <-factor(data_6$tree_long, levels = c('<37.50894','37.50894-38.50322', '>=38.50322'))
+table(data_6$tree_long)
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_6$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_6[-validationIndex,]
+my_train <- data_6[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR6 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+La eliminación de la variable **payment_type** y la tramificación de las variables supone un incremento del valor de Accuracy pasando del 0.8063 al 0.8081
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR6, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r}
+# Importancia de las variables 
+vars_imp <- fitR6$variable.importance
+vars_imp <- as.data.frame(vars_imp)
+vars_imp$myvar <- rownames(vars_imp)
+vars_imp <- as.data.table(vars_imp)
+setorder(vars_imp, -vars_imp)
+
+ggbarplot(vars_imp[1:ncol(data_6) - 1],
+          x = "myvar", y = "vars_imp",
+          color = "blue",             
+          palette = "jco",            
+          sort.val = "asc",         
+          sort.by.groups = FALSE,     
+          x.text.angle = 90,          
+          ylab = "Importancia",
+          xlab = 'Variable', 
+          rotate = TRUE,
+          ggtheme = theme_minimal()
+          )
+```
+
+A continuación se crea una nueva versión donde se introduce una variable correspondiente con el día de la semana en función de la variable **date_recorded**.
+
+```{r}
+#Construcción del nuevo conjunto de entrenamiento
+data_7 <- copy(data_5)
+data_7$diasem  <- wday(data_7$date_recorded, label = TRUE, abbr = TRUE)
+```
+
+```{r}
+#Partición entrenamiento-test
+set.seed(123)
+validationIndex <- createDataPartition(data_7$status_group, p = 0.8, list = FALSE)
+
+my_test  <- data_7[-validationIndex,]
+my_train <- data_7[validationIndex,]
+```
+
+```{r}
+#Construcción del modelo
+fitR7 <- ranger(
+              status_group ~. ,
+              data = my_train,
+              num.trees = 100,
+              importance = 'impurity',
+              write.forest = TRUE,
+              min.node.size = 1,
+              splitrule = "gini",
+              verbose = TRUE,
+              classification = TRUE
+            )
+```
+
+Se pasa de un valor de Accuracy del 0.8081 del anterior modelo a un valor de 0.8086
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR7, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+A continuación, a partir del conjunto de entrenamiento anterior, se pone a prueba cuál es el número de árboles en la función de **ranger** que maximiza la capacidad predictiva.
+
+```{r}
+# Barrido con diferente número de arboles.
+val_trees <- c(100, 150, 200, 250)
+
+for (i in val_trees) {
+  print(i)  
+  fitR8 <- ranger(
+                  status_group ~. ,
+                  data = my_train,
+                  num.trees = i,
+                  keep.inbag = TRUE,
+                  importance = 'impurity',
+                  write.forest = TRUE,
+                  min.node.size = 1,
+                  splitrule = "gini",
+                  verbose = TRUE,
+                  classification = TRUE,
+                  set.seed(123)
+                )
+    
+  valor_pred <- predict(fitR8, data = my_test)
+  fit_acc <- Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+  print(fit_acc)
+}
+
+fitR7 <- ranger(
+                  status_group ~. ,
+                  data = my_train,
+                  num.trees = 250,
+                  importance = 'impurity',
+                  write.forest = TRUE,
+                  min.node.size = 1,
+                  splitrule = "gini",
+                  verbose = TRUE,
+                  classification = TRUE,
+                  set.seed(123),
+                  #class.weights = c(0.5, 0.1, 0.4)
+                )
+```
+
+Se entrena de nuevo el modelo, esta vez con un valor de 250 como número de árboles puesto que es con los que se obtiene mayor capacidad de predicción.
+
+Se pasa de un valor de Accuracy de 0.8086 del modelo **R7** a un valor de 0.8118
+
+```{r}
+#Evaluación del modelo
+valor_pred <- predict(fitR8, data = my_test)
+table(my_test$status_group, valor_pred$predictions)
+Accuracy(y_pred = valor_pred$predictions, y_true = my_test$status_group)
+```
+
+```{r}
+#Realizo las predicciones (modelo no lineal)
+testV <- read.csv("TestSetValues.csv")
+testValues <- copy(testV)
+
+testValues <- cbind(select_if(testValues, is.numeric), date_recorder = testValues$date_recorded)
+testValues$num_private <- NULL
+testValues$anyo    <- year(testValues$date_recorder)
+testValues$mes     <- month(testValues$date_recorder)
+testValues$dia     <- day(testValues$date_recorder)
+testValues$distancia <- sqrt((testValues$longitude ^ 2) + (testValues$latitude ^ 2))
+testValues$date_recorded <- NULL
+
+
+testChr <- copy(testV)
+testChr <- select_if(testChr, is.character)
+testChr[testChr == ""] <- NA
+testChr$scheme_management[is.na(testChr$scheme_management)] <- "VWC"
+testChr$installer[is.na(testChr$installer)] <- "DWE"
+testChr$funder[is.na(testChr$funder)] <- "Government Of Tanzania"
+testChr$public_meeting[is.na(testChr$public_meeting)] <- "True"
+testChr$permit[is.na(testChr$permit)] <- "True"
+testChr$scheme_name <- NULL
+testChr$subvillage <- NULL
+testChr$recorded_by <- NULL
+
+testModel <- cbind(select_if(testValues, is.numeric), testChr)
+testModel$diasem  <- wday(testModel$date_recorded, label = TRUE, abbr = TRUE)
+
+pred <- predict(fitR8, testModel)
+id <- as.data.frame(testValues$id)
+status_group <- as.data.frame(pred$prediction)
+my_pred <- cbind(id, status_group)
+colnames(my_pred) <- c("id", "status_group")
+write.csv(my_pred, "Predict.csv", row.names = FALSE)
+```
+
+### Mundo H2O
+Se inicia el mundo h2o con el objetivo de utilizar alguno de sus algoritmos.
+
+```{r, warning=FALSE, message=FALSE}
+#Creación del clúster
+library(h2o)
+
+h2o.init(nthreads = 4, max_mem_size = '2g') #CPU + Memoria
+
+options("h2o.use.data.table" = TRUE)
+
+dataNum_hex <- as.h2o(data)
+
+splits <- h2o.splitFrame( 
+  data = dataNum_hex, 
+  ratios = c(0.6,0.2),
+  destination_frames = c("train_hex", "valid_hex", "test_hex"), 
+  seed = 123
+) 
+train_hex <- splits[[1]] 
+valid_hex <- splits[[2]] 
+test_hex  <- splits[[3]]
+```
+
+De los algoritmos de h2o, se hace uso de random forest.
+
+```{r, warning=FALSE}
+#Construcción del modelo con uno de los algorítmos de h2o
+y <- "status_group"
+x <- setdiff(names(dataNum_hex), y)
+train_hex[, y] <- as.factor(train_hex[,y] )
+
+nfolds <- 5
+
+my_model <- h2o.randomForest(
+  x = x,
+  y = y,
+  training_frame = train_hex,
+  validation_frame = valid_hex,
+  nfolds = nfolds,
+  keep_cross_validation_predictions = TRUE,
+  seed = 123,
+  stopping_metric = 'AUC',
+  verbose = FALSE,
+  ntrees = 150,
+  max_depth = 5,
+)
+```
+
+Se obtiene un valor del Accuracy de 0.624 de media.
+
+```{r}
+#Resultados del modelo
+my_model
+```
+
+```{r}
+#Cierre del clúster
+h2o.shutdown(prompt = FALSE)
+```

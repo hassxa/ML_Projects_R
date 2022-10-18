@@ -1,0 +1,859 @@
+---
+title: "Estudio sobre la fuga de clientes en una compañía telefónica"
+author: "Hassan Chafi Xavier"
+date: "1/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preparación del entorno de trabajo.
+Para comenzar, voy a fijar el directorio de trabajo, cargo el archivo de las funciones y las librerías que usaré y realizo una lectura del archivo de los datos depurado que había guardado anteriormente.
+
+```{r cars, warning=FALSE, results='hide', message=FALSE}
+# Fijo el directorio de trabajo
+setwd("C:/Users/96has/Documents/NTIC/6. Documentación minería de Datos y Modelización Predictiva-20211212")
+
+#Cargo el archivo de funciones de R
+source("Funciones_R.R")
+
+#Cargo las librerías que usaré
+paquetes(c('corrplot','caret','ggplot2', 'lmSupport', 'questionr','psych', 'caret', 'glmnet', 'epiDisplay', 'pROC', 'dplyr', 'kableExtra'))
+```
+
+```{r}
+# Cargar el archivo de datos depurados
+datos <- readRDS("C:/Users/96has/Documents/NTIC/6. Documentación minería de Datos y Modelización Predictiva-20211212/Tarea/datosTelefoniaDep.RDS")
+```
+
+Voy a realizar una breve inspección de los datos para revisar que no hayan sufrido ninguna alteración al cargarlos.
+
+```{r}
+# Observamos los detalles de las columnas del archivo de datos
+str(datos)
+summary(datos)
+```
+
+## Separación de variable objetivo y variables predictoras y creación de variables aleatorias de control.
+En este punto voy a separar la variable objetivo de los datos que contienen las variables predictoras para la automatización del proceso de transformación de las variables. También voy a crear dos variables aleatorias que tendrán una función de control para evaluar la influencia que tienen las variables predictoras sobre la respuesta; las variables predictoras con menor capacidad de discriminación que las variables aleatorias serán variables que no tendrán relevancia a la hora de explicar la variabilidad de la variable objetivo.
+
+```{r}
+# Separación de la variable objetivo de las variables predictoras
+varObj <- datos$varObj
+input <- datos[ , -1]
+```
+
+```{r}
+# Creación de las variables aleatorias de control
+input$aleatorio1 <- runif(nrow(input))
+input$aleatorio2 <- runif(nrow(input))
+```
+
+## Análisis descriptivo sobre la relación entre pares de variables.
+En este apartado se evaluará fundamentalmente la relación que tienen las variables predictoras sobre la variable objetivo. 
+
+```{r}
+# Evaluación sobre la importancia de las variables predictoras sobre la variable objetivo
+graficoVcramer(input, varObj)
+```
+
+El gráfico V de Cramer revela un ranking de influencia de las variables predictoras sobre la variable objetivo. Las variables posicionadas por debajo de las dos variables aleatorias de control generadas, no tendrán la necesaria influencia sobre la variable objetivo para explicar su variabilidad, estas variables son: Telf_serv y Genero. De este modo, parece que las variables que más influyen en la variabilidad de la variable objetivo binaria **Fuga** son:
+
+- Contrato
+- Antig.fc.edad
+- Int_serv
+- MetodoPago
+- FacturaMes
+
+```{r}
+#Analisis gráfico sobre la influencia de algunas variables categóricas sobre la variable objetivo
+m1 <- mosaico_targetbinaria(input$Contrato, varObj, "Tipo de contrato") #Esta sí influye
+m2 <- mosaico_targetbinaria(input$Telf_serv, varObj, "Servicio de telefonía") #Esta no influye
+
+```
+
+```{r, warning=FALSE}
+#Analisis gráfico sobre la influencia de algunas variables continuas sobre la variable objetivo
+bx1 <- boxplot_targetbinaria(input$Antig.fc.edad, varObj, "Tiempo de antigüedad en meses") #Esta sí influye
+h1 <- hist_targetbinaria(input$Antig.fc.edad, varObj, "Tiempo de antigüedad en meses") #Esta sí influye
+bx2 <- boxplot_targetbinaria(input$FacturaMes, varObj, "Importe facturado mensual") #Esta sí influye
+h2 <- hist_targetbinaria(input$FacturaMes, varObj, "Importe facturado mensual") #Esta sí influye
+
+gridExtra::marrangeGrob(list(bx1, bx2, h1, h2),nrow = 2,ncol=2)
+```
+
+## Transformación de las variables.
+A continuación se transforman las variables predictoras continuas para maximizar la relación con la variable objetivo en sentido V de Cramer.
+
+```{r, warning=FALSE}
+# Se buscan las mejores transformaciones
+input_obj <- cbind(input, Transf_Auto(Filter(is.numeric, input), varObj))
+
+# Se guarda el dataset con las transformaciones
+todo_obj <- data.frame(input_obj, varObj)
+saveRDS(todo_obj, "transf_obj_Telefonia.RDS")
+```
+
+Ahora se comprueba si la influencia de las variables predictoras sobre la variable objetivo ha aumentado. Las variables que han podido mejorar su influencia sobre la variable objetivo son **Antig.fd.edad**, **FacturaMes** y **FacturaTotal**.
+
+```{r, warning=FALSE}
+# Evaluación sobre la importancia de las variables predictoras sobre la variable objetivo
+graficoVcramer(input_obj, varObj)
+```
+
+Antes de comenzar con el desarrollo de modelos para predecir la fuga de clientes en la compañía telefónica, vamos a analizar la distribución de la variable objetivo. En este caso, existe una situación de desbalanceo hacia los 0 ya que la frecuencia es del 73,5%, esto es, el modelo tendrá mayor dificultad en reconocer los 1 por lo que si obtenemos un accuracy de 0,735 tenemos que sospechar y mirar detenidamente la sensibilidad y especificidad.
+
+```{r}
+# Cargar los datos depurados
+todo <- todo_obj
+
+# Comprobar la distribución de la variable objetivo
+freq(todo$varObj)
+```
+
+## Partición training-test.
+Se realiza la partición del archivo seleccionando las variables originales y la variable objetivo.
+
+```{r}
+# Posiciones de las variables
+names(todo)
+```
+
+```{r}
+# Se realiza la partición
+set.seed(1234567000)
+
+trainIndex <- createDataPartition(todo$varObj, p = 0.8, list = FALSE)
+
+data_train <- todo[trainIndex,]
+data_test <- todo[-trainIndex,]
+```
+
+## Modelo completo de referencia.
+En este primer modelo, salta a la vista que hay algunos efectos no significativos.
+
+```{r}
+# Primer modelo sin las variables transformadas
+modeloInicial <- glm(varObj~., data = data_train[ ,c(1:21, 27)], family = binomial)
+summary(modeloInicial)
+```
+
+Se consultan los valores del pseudo R2 en los conjuntos de training y test.
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modeloInicial, data_train, "varObj")
+pseudoR2(modeloInicial, data_test, "varObj")
+
+# Número de parámetros
+modeloInicial$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modeloInicial)
+```
+
+Es llamativo que una variable que habíamos visto que resultaba ser influyente a la respuesta, algunas de sus categorías no tengan estrellas en el modelo inicial desarrollado.
+
+```{r}
+table(todo$MetodoPago, todo$varObj)
+table(data_train$MetodoPago, data_train$varObj)
+```
+
+En efecto, el evento de fuga del cliente de la compañía telefónica con métodos de pago automáticos es relativamente muy inferior al evento de no fuga para estos mismos métodos de pago. Tal vez resulte interesante unificar estas categorías de modo que exista una sola categoría que representen los pagos automáticos sin hacer distinción entre si se ha realizado mediante transferencia bancaria o mediante tarjeta de crédito.
+
+```{r}
+names(todo)
+```
+
+```{r}
+# Uno categorías
+todo$MetodoPago <- car::recode(todo$MetodoPago, "c('Bank transfer (automatic)', 'Credit card (automatic)') 
+                               = 'Automatic Payments'; c('Electronic check', 'Mailed check') = 'Not Automatic Payments'")
+todo_obj$MetodoPago <- car::recode(todo_obj$MetodoPago, "c('Bank transfer (automatic)', 'Credit card (automatic)') 
+                               = 'Automatic Payments'; c('Electronic check', 'Mailed check') = 'Not Automatic Payments'")
+
+# Actualizar la partición
+data_train <- todo[trainIndex,]
+data_test <- todo[-trainIndex,]
+
+# Volver a ajustar el modelo inicial
+modeloInicial <- glm(varObj~., data = data_train[ ,c(1:21, 27)], family=binomial)
+summary(modeloInicial)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modeloInicial, data_train, "varObj")
+pseudoR2(modeloInicial, data_test, "varObj")
+
+# Número de parámetros
+modeloInicial$rank
+
+# Importancia de las variables al pseudo R2
+impVariablesLog(modeloInicial, "varObj")
+```
+
+Se prueba un segundo modelo con las variables más relevantes en cuanto a su aportación al pseudo R2, de manera que se eliminan todas las variables cuya aportación esté por debajo de las variables aleatorias de control creadas.
+
+```{r}
+# Segundo modelo
+modelo2 <- update(modeloInicial,.~.-FacturaTotal-aleatorio2-Genero-FacturaMes-Conyuge-Antivirus_disp-aleatorio1)
+summary(modelo2)
+```
+
+Se consultan los valores del pseudo R2 en los conjuntos de training y test.
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo2, data_train, "varObj")
+pseudoR2(modelo2, data_test, "varObj")
+
+# Número de parámetros
+modelo2$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo2)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo2,'varObj')
+```
+
+```{r}
+# Tercer modelo
+modelo3 <- update(modelo2,.~.-Mayor65)
+summary(modelo3)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo3, data_train, "varObj")
+pseudoR2(modelo3, data_test, "varObj")
+
+# Número de parámetros
+modelo3$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo3)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo3,'varObj')
+```
+
+```{r}
+# Cuarto modelo
+modelo4 <- update(modelo3,.~.-CopiaSeguridad)
+summary(modelo4)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo4, data_train, "varObj")
+pseudoR2(modelo4, data_test, "varObj")
+
+# Número de parámetros
+modelo4$rank
+```
+
+```{r}
+# Factor de inflación de la varianza estabilizado
+car::vif(modelo4)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo4,'varObj')
+```
+
+```{r}
+# Quinto modelo
+modelo5 <- update(modelo4,.~.-VariasLineas)
+summary(modelo5)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo5, data_train, "varObj")
+pseudoR2(modelo5, data_test, "varObj")
+
+# Número de parámetros
+modelo5$rank
+```
+
+```{r}
+# Factor de inflación de la varianza estabilizado
+car::vif(modelo5)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo5,'varObj')
+```
+
+```{r}
+# Sexto modelo
+modelo6 <- update(modelo5,.~.-Peliculas)
+summary(modelo6)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo6, data_train, "varObj")
+pseudoR2(modelo6, data_test, "varObj")
+
+# Número de parámetros
+modelo6$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo6)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo6,'varObj')
+```
+
+```{r}
+# Séptimo modelo
+modelo7 <- update(modelo6,.~.-PersCargo)
+summary(modelo7)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo7, data_train, "varObj")
+pseudoR2(modelo7, data_test, "varObj")
+
+# Número de parámetros
+modelo7$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo7)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo7,'varObj')
+```
+
+```{r}
+# Octavo modelo
+modelo8 <- update(modelo7,.~.-Telf_serv)
+summary(modelo8)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo8, data_train, "varObj")
+pseudoR2(modelo8, data_test, "varObj")
+
+# Número de parámetros
+modelo8$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo8)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo8,'varObj')
+```
+
+```{r}
+# Noveno modelo
+modelo9 <- update(modelo8,.~.-Soporte_tecnico)
+summary(modelo9)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo9, data_train, "varObj")
+pseudoR2(modelo9, data_test, "varObj")
+
+# Número de parámetros
+modelo9$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo9)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo9,'varObj')
+```
+
+```{r}
+# Decimo modelo
+modelo10 <- update(modelo9,.~.-TV_streaming)
+summary(modelo10)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo10, data_train, "varObj")
+pseudoR2(modelo10, data_test, "varObj")
+
+# Número de parámetros
+modelo10$rank
+```
+
+```{r}
+# Factor de inflación de la varianza no estabilizado
+car::vif(modelo10)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo10,'varObj')
+```
+
+```{r}
+# Undecimo modelo
+modelo11 <- update(modelo10,.~.-MetodoPago)
+summary(modelo11)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo11, data_train, "varObj")
+pseudoR2(modelo11, data_test, "varObj")
+
+# Número de parámetros
+modelo11$rank
+```
+
+```{r}
+# Factor de inflación de la varianza estabilizado
+car::vif(modelo11)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo11,'varObj')
+```
+
+```{r}
+# Duodecimo modelo
+modelo12 <- update(modelo11,.~.-Seguridad)
+summary(modelo12)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo12, data_train, "varObj")
+pseudoR2(modelo12, data_test, "varObj")
+
+# Número de parámetros
+modelo12$rank
+```
+
+```{r}
+# Factor de inflación de la varianza estabilizado
+car::vif(modelo12)
+```
+
+```{r}
+# Importancia de las variables al pseudo R2
+impVariablesLog(modelo12,'varObj')
+```
+
+```{r}
+# Decimotercer modelo
+modelo13 <- update(modelo12,.~.-Fact_sinPapel)
+summary(modelo13)
+```
+
+```{r}
+# Consulta de los valores de pseudo R2
+pseudoR2(modelo13, data_train, "varObj")
+pseudoR2(modelo13, data_test, "varObj")
+
+# Número de parámetros
+modelo13$rank
+```
+
+```{r}
+# Factor de inflación de la varianza estabilizado
+car::vif(modelo13)
+```
+
+```{r, warning=FALSE}
+# Resumen modelos manuales backward
+
+modelos_Man<-list(modeloInicial,modelo2,modelo3,modelo4,
+                 modelo5,modelo6,modelo7,modelo8,
+                 modelo9,modelo10,modelo11, modelo12, modelo13)
+
+# Saco los parametros de los modelos
+modelos_Par<-c(modeloInicial$rank,modelo2$rank,modelo3$rank,modelo4$rank,
+                 modelo5$rank,modelo6$rank,modelo7$rank,modelo8$rank,
+                 modelo9$rank,modelo10$rank,modelo11$rank, modelo12$rank, modelo13$rank)
+
+# Saco los pseudoR
+psR_Man<-lapply(modelos_Man,pseudoR2,data_test,"varObj")
+
+# Saco los VIF 
+vif_Man<-lapply(modelos_Man,car::vif)
+
+# Para calcular los VIF máximos
+vifMAx_Man<- c()
+for (i in 1:length(vif_Man)){
+  if (class(vif_Man[[i]])=='numeric'){
+    vifMAx_Man[i]=max(vif_Man[[i]])
+  } else{
+    vifMAx_Man[i]=max(vif_Man[[i]][,3])
+  }
+}
+
+tabla_modelos <- tibble(
+  Modelo = c('modeloInicial','modelo2','modelo3','modelo4',
+                 'modelo5','modelo6','modelo7','modelo8',
+                 'modelo9','modelo10','modelo11', 'modelo12',
+                 'modelo13'),                                  
+  Parametros=modelos_Par,
+  pseudoR= unlist(psR_Man),
+  VIF_max=vifMAx_Man)
+
+tibble(tabla_modelos)
+```
+
+```{r}
+modeloManual <- modelo8
+```
+
+## Selección de variables clásica con variables originales.
+
+```{r}
+null <- glm(varObj~1, data = data_train, family = binomial) #Modelo minimo
+full <- glm(varObj~., data = data_train[ ,c(1:21, 27)], family = binomial) #Modelo maximo sin las transformaciones
+```
+
+```{r}
+modeloStepAIC <- step(null, scope = list(lower = null, upper = full), direction = "both", trace = 0)
+summary(modeloStepAIC)
+
+psr_clas1 <- pseudoR2(modeloStepAIC, data_test, "varObj")
+```
+
+```{r}
+modeloBackAIC <- step(full, scope = list(lower = null, upper = full), direction = "backward", trace = 0)
+summary(modeloBackAIC)
+
+psr_clas2 <- pseudoR2(modeloBackAIC, data_test, "varObj")
+```
+
+```{r}
+modeloStepBIC <- step(null, scope = list(lower = null, upper = full), trace = 0,
+                      direction = "both", k = log(nrow(data_train)))
+summary(modeloStepBIC)
+
+psr_clas3 <- pseudoR2(modeloStepBIC, data_test, "varObj")
+```
+
+```{r}
+modeloBackBIC <- step(full, scope = list(lower = null, upper = full), trace = 0, 
+                      direction = "backward",k = log(nrow(data_train)))
+summary(modeloBackBIC)
+
+psr_clas4 <- pseudoR2(modeloBackBIC, data_test, "varObj")
+```
+
+```{r, warning=FALSE}
+# Resumen
+param_Clas <- c(modeloStepAIC$rank, modeloBackAIC$rank,
+modeloStepBIC$rank, modeloBackBIC$rank)
+
+psR_Clas <- c(psr_clas1,psr_clas2,psr_clas3,psr_clas4)
+tibble(Modelo = c('StepAIC','BackAIC', 'StepBIC', 'BackBIC'),
+      parametros = param_Clas,
+      pseudoR = psR_Clas)
+```
+
+```{r}
+modeloEP <- modeloStepBIC
+```
+
+## Selección de variables clásica con variables originales y sus interacciones.
+
+```{r}
+#Genero interacciones
+formInt <- formulaInteracciones(todo_obj[,c(1:21, 27)], 22)
+fullInt <- glm(formInt, data = data_train, family = binomial)
+```
+
+```{r, warning=FALSE}
+modeloStepAIC_int <- step(null, scope = list(lower = null, upper = fullInt), direction = "both", trace = 0)
+summary(modeloStepAIC_int)
+
+psr_clas1_int <- pseudoR2(modeloStepAIC_int, data_test, "varObj")
+```
+
+```{r}
+modeloStepBIC_int <- step(null, scope=list(lower = null, upper = fullInt), 
+                          direction = "both",k = log(nrow(data_train)), trace = 0)
+summary(modeloStepBIC_int)
+
+psr_clas2_int <- pseudoR2(modeloStepBIC_int, data_test, "varObj")
+```
+
+```{r, warning=FALSE}
+# Resumen
+param_Clas <- c(modeloStepAIC_int$rank, modeloStepBIC_int$rank)
+
+psR_Clas <- c(psr_clas1_int,psr_clas2_int)
+tibble(Modelo = c('StepAIC_int', 'StepBIC_int'),
+      parametros = param_Clas,
+      pseudoR = psR_Clas)
+```
+
+## Selección de variables clásica con variables originales y transformaciones de las variables continuas.
+
+```{r}
+fullT <- glm(varObj~., data = data_train, family = binomial) 
+```
+
+```{r}
+modeloStepAIC_trans <- step(null, scope = list(lower = null, upper = fullT), trace = 0, direction = "both")
+summary(modeloStepAIC_trans)
+```
+
+```{r}
+psr_clas1_trans <- pseudoR2(modeloStepAIC_trans, data_test, "varObj")
+```
+
+```{r}
+modeloStepBIC_trans <- step(null, scope = list(lower = null, upper = fullT), 
+                            trace = 0, direction = "both",k = log(nrow(data_train)))
+summary(modeloStepBIC_trans)
+```
+
+```{r}
+psr_clas2_trans <- pseudoR2(modeloStepBIC_trans, data_test, "varObj")
+```
+
+```{r, warning=FALSE}
+# Resumen
+param_Clas <- c(modeloStepAIC_trans$rank, modeloStepBIC_trans$rank)
+
+psR_Clas <- c(psr_clas1_trans,psr_clas2_trans)
+tibble(Modelo = c('StepAIC_trans', 'StepBIC_trans'),
+      parametros = param_Clas,
+      pseudoR = psR_Clas)
+```
+
+```{r}
+modeloT <- modeloStepBIC_trans
+```
+
+## Selección de variables clásica con variables originales y transformaciones de las variables continuas e interacciones.
+
+```{r}
+formIntT <- formulaInteracciones(todo_obj, 27)
+fullIntT <- glm(formIntT, data = data_train, family = binomial)
+```
+
+```{r}
+modeloStepAIC_transInt <- step(null, scope = list(lower = null, upper = fullIntT), trace = 0, direction = "both")
+summary(modeloStepAIC_transInt)
+```
+
+```{r, warning=FALSE}
+psr_clas1_intTrans <- pseudoR2(modeloStepAIC_transInt, data_test, "varObj")
+```
+
+```{r}
+modeloStepBIC_transInt <- step(null, scope = list(lower = null, upper = fullIntT), 
+                               trace = 0, direction = "both",k = log(nrow(data_train)))
+summary(modeloStepBIC_transInt)
+```
+
+```{r}
+psr_clas2_intTrans <- pseudoR2(modeloStepBIC_transInt, data_test, "varObj")
+```
+
+```{r, warning=FALSE}
+# Resumen
+param_Clas <- c(modeloStepAIC_transInt$rank, modeloStepBIC_transInt$rank)
+
+psR_Clas <- c(psr_clas1_intTrans,psr_clas2_intTrans)
+tibble(Modelo = c('StepAIC_transInt', 'StepBIC_transInt'),
+      parametros = param_Clas,
+      pseudoR = psR_Clas)
+```
+
+## Esquema de selección aleatoria de variables.
+
+```{r, warning=FALSE}
+## Seleccion aleatoria
+
+rep <- 20
+prop <- 0.7
+modelosGenerados<-c()
+for (i in 1:rep){
+  set.seed(12345+i)
+  subsample <-data_train[sample(1:nrow(data_train), prop * nrow(data_train), replace = T),]
+  full <- glm(formIntT, data = subsample, family = binomial)
+  null <- glm(varObj~1, data = subsample, family = binomial)
+  modeloAux <- step(null,scope=list(lower=null,upper=full),direction="both",trace=0,k=log(nrow(subsample)))
+  modelosGenerados <- c(modelosGenerados,paste(sort(unlist(strsplit(as.character(formula(modeloAux))[3]," [+] "))),collapse = "+"))
+}
+(freq(modelosGenerados, sort = "dec") -> fr)
+```
+
+## Comparativa final y selección del modelo ganador
+
+```{r}
+total2<-c()
+modelos2<-c(formula(modeloManual), formula(modeloEP), formula(modeloT),
+            as.formula(paste('varObj ~', rownames(fr)[1])),
+            as.formula(paste('varObj ~', rownames(fr)[2])),
+            as.formula(paste('varObj ~', rownames(fr)[3])))
+
+auxVarObj <- todo$varObj
+todo$varObj <- make.names(todo$varObj)
+
+for (i in 1:length(modelos2)){
+  set.seed(1712)
+  vcr<-train(as.formula(modelos2[[i]]), data = todo,
+             method = "glm", family = binomial, metric = "ROC",
+             trControl = trainControl(method="repeatedcv", number=5, repeats=20, summaryFunction = twoClassSummary,
+                                      classProbs = TRUE,
+                                      returnResamp="all")
+  )
+  total2<-rbind(total2,cbind(vcr$resample[,1:2],modelo=rep(paste("Modelo",i),
+                                                         nrow(vcr$resample))))
+}
+
+todo$varObj <- auxVarObj
+boxplot(ROC~modelo,data=total2,main="Accuracy")
+```
+
+```{r}
+aggregate(ROC~modelo, data = total2, mean) 
+```
+
+```{r}
+aggregate(ROC~modelo, data = total2, sd)
+```
+
+```{r}
+modeloManual$formula
+```
+
+## Interpretación de parámetros del modelo ganador.
+
+```{r}
+modFinal <- glm(formula(modeloManual),data = todo_obj, family = binomial)
+
+coef(modFinal)
+```
+
+```{r}
+logistic.display(modFinal)
+```
+
+## Búsqueda del punto de corte óptimo para la probabilidad estimada.
+
+```{r}
+# Modifico la función sensEspCorte
+sensEspCorte <- function(modelo,dd,nombreVar,ptoCorte,evento){
+
+  probs <-predict(modelo,newdata=dd,type="response")
+
+  cm<-confusionMatrix(data=factor(ifelse(probs>ptoCorte,1,0)), reference=dd[,nombreVar],positive=evento)
+
+  c(cm$overall[1:2],cm$byClass[1:2])
+
+}
+```
+
+```{r, warning=FALSE}
+## Generamos una rejilla de puntos de corte
+posiblesCortes<-seq(0,1,0.01)
+
+# Aplicamos función sensEspCorte a cada punto de la rejilla
+rejilla<-data.frame(t(rbind(posiblesCortes,sapply(posiblesCortes,function(x) 
+  sensEspCorte(modeloManual,data_test,"varObj",x,"1")))))
+
+# Generamos Youden
+rejilla$Youden<-rejilla$Sensitivity+rejilla$Specificity-1
+
+# Generamos Index
+rejilla$Index <- rejilla$Kappa+rejilla$Youden
+
+# Puntos de corte Youden
+rejilla[which.max(rejilla$Youden),]
+
+# Punto máximo Index
+rejilla[which.max(rejilla$Index),]
+```
+
+```{r}
+# Predicciones en test en forma de probabilidad estimada
+predTest<-predict(modeloManual,data_test, type = "response")
+clasTest<-factor(ifelse(predTest>0.37,1,0))
+
+# Matriz de confusión
+confusionMatrix(clasTest,data_test$varObj, positive = '1')
+```
+
+El modelo es capaz de reconocer 741 de 933 negativos y 250 de 337 positivos.
+
+## Predicción con el modelo ganador para los datos del test.
+
+```{r}
+# Lectura de los datos de test
+datosFuga <- readRDS("C:/Users/96has/Documents/NTIC/6. Documentación minería de Datos y Modelización Predictiva-20211212/Tarea/FugaClientes_test.RDS")
+
+# Cambio el nombre de la variable Antiguedad
+colnames(datosFuga)[6] <- 'Antig.fc.edad'
+
+# Cambio la variable Mayor65 que aparece como numérica y unifico categorías en MetodoPago
+datosFuga$Mayor65  <- as.character(datosFuga$Mayor65)
+
+datosFuga$MetodoPago <- car::recode(datosFuga$MetodoPago, "c('Bank transfer (automatic)', 'Credit card (automatic)') 
+                               = 'Automatic Payments'; c('Electronic check', 'Mailed check') = 'Not Automatic Payments'")
+
+#Recodificación de los valores de las variables dicotómicas
+datosFuga$Conyuge <- car::recode(datosFuga$Conyuge, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$PersCargo <- car::recode(datosFuga$PersCargo, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Telf_serv <- car::recode(datosFuga$Telf_serv, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$VariasLineas <- car::recode(datosFuga$VariasLineas, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Seguridad <- car::recode(datosFuga$Seguridad, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$CopiaSeguridad <- car::recode(datosFuga$CopiaSeguridad, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Antivirus_disp <- car::recode(datosFuga$Antivirus_disp, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Soporte_tecnico <- car::recode(datosFuga$Soporte_tecnico, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$TV_streaming <- car::recode(datosFuga$TV_streaming, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Peliculas <- car::recode(datosFuga$Peliculas, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+datosFuga$Fact_sinPapel <- car::recode(datosFuga$Fact_sinPapel, "'Yes' = 1; 'No' = 0", as.factor = TRUE)
+
+# Aplico el modelo
+varObjTest <- runif(nrow(datosFuga))
+inputTest <- cbind(datosFuga, Transf_Auto(Filter(is.numeric, datosFuga), varObjTest))
+todoTest <- data.frame(inputTest, varObjTest)
+resultadosTest <- factor(ifelse(predict(modeloManual, todoTest, type = 'response') > 0.37, 1, 0))
+datosFuga$Fuga <- resultadosTest
+dfTest <- datosFuga[ ,c(1, 21)]
+colnames(dfTest)[2] <- 'Fuga_pred'
+freq(dfTest$Fuga_pred)
+saveRDS(dfTest, 'FugaPredict_HassanChafiXavier.RDS')
+```

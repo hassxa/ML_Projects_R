@@ -1,0 +1,367 @@
+---
+title: "ACP y Cluster"
+author: "Hassan Chafi Xavier"
+date: "13/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preparación de las herramientas de trabajo
+Como en todo proyecto, lo primero que comenzaré haciendo es cargar las librerías que voy a utilizar y cargar los datos con los que se pretende trabajar.
+
+```{r, warning=FALSE, message=FALSE, results='hide'}
+# Cargo librerías
+library("readxl")
+library("knitr")
+library("pastecs")
+library("lattice")
+library("ggplot2")
+library("corrplot")
+library("factoextra")
+library("FactoMineR")
+library("cluster")
+library("heatmaply")
+library("NbClust")
+```
+
+```{r}
+# Lectura del archivo
+provincias <- read_xlsx("C:/Users/96has/Documents/NTIC/7. Documentación minería de Datos y Modelización Predictiva - Juana Mª Alonso-20220117/Tarea minería de datos y modelización predictiva - Juana Mª/Evaluacion/Provincias.xlsx")
+
+# Asegurar que se trate de un dataframe
+datos <- as.data.frame(provincias)
+
+# Identificar el nombre de cada fila con el nombre de la provincia
+rownames(datos) <- datos[,1]
+
+# Obtener solo las variables continuas
+datos_cont <- datos[,-1]
+```
+
+### 1. Calcular la matriz de correlaciones, y su representación gráfica ¿Cuáles son las variables más correlacionadas de forma inversa? 0.5
+Las variables que presentan una mayor relación lineal inversa son las que se produce entre la **Natalidad** y la **Mortalidad** y entre la **TasaActividad** y la **Mortalidad**.
+
+```{r}
+matriz_correlaciones <- cor(datos_cont, method = "pearson")
+```
+
+```{r}
+corrplot(matriz_correlaciones, type = "upper", order = "hclust", tl.col = "black", tl.cex = 0.6, tl.srt = 90)
+```
+
+Esta correlación entre las variables anteriormente explicadas se puede visualizar con un gráfico de dispersión de las variables para las que existe esta relación lineal inversa.
+
+```{r}
+# Relación linea inversa entre Natalidad y Mortalidad
+xyplot(Natalidad ~ Mortalidad, data = datos)
+```
+
+A medida que disminuye la tasa se natalidad aumenta la tasa de mortalidad.
+
+```{r}
+# Relación inversa entre TasaActividad y Mortalidad
+xyplot(TasaActividad ~ Mortalidad, data = datos)
+```
+
+A medida que disminuye la tasa de actividad aumenta la tasa de mortalidad.
+
+### 2. Realizar un análisis de componentes principales sobre la matriz de correlaciones, calculando 7 componentes. Estudiar los valores de los autovalores obtenidos y las gráficas que los resumen. ¿Cuál es el número adecuado de componentes? 0.5
+
+Se decide realizar el análisis con las tres principales componentes ya que la información explicada está próxima al 90% y el autovalor de la cuarta componente no alcanza el valor uno por lo que la varianza que explicaría este cuarto componente sería menor que la de una variable sola. La suma de los autovalores (**eigenvalue**) suma el número total de componentes que tenemos y el valor de cada uno de estos autovalores recoge el número total de variables a las que se corresponderían. Por lo que el valor del autovalor de una determinada componente dividido entre el número total de variables y multiplicado por 100 indica el porcentaje de variabilidad que explica esa componente.
+
+```{r, warning=FALSE}
+# Analisis de los componentes principales
+fit <- PCA(datos_cont, scale.unit = TRUE, ncp = 7, graph = FALSE)
+eig <- get_eigenvalue(fit)
+knitr::kable(eig, digits = 2, caption = "Autovalores")
+```
+
+El siguiente gráfico muestra el porcentaje de varianza explicado por las componentes principales. En este caso, las componentes principales seleccionadas para el análisis representan 63,7%, 14,2% y 9,1% de la varianza total.
+
+```{r}
+# Scree plot
+fviz_eig(fit, addlabels = TRUE)
+```
+
+### 3. Hacer de nuevo el análisis sobre la matriz de correlaciones pero ahora indicando el número de componentes principales que hemos decidido retener (Que expliquen aproximadamente el 90%). Sobre este análisis contestar los siguientes apartados.
+- a. Mostrar los coeficientes para obtener las componentes principales ¿Cuál es la expresión para calcular la primera Componente en función de las variables originales? 1
+
+La expresión para calcular la primera componente en función de las variables originales es $CP_{1} = 0.294Poblacion^{*} - 0.106Mortalidad^{*} + 0.041Natalidad^{*} + 0.110 IPC^{*} + 0.294NumEmpresas^{*} + 0.286Industria^{*} + 0.293Construccion^{*} + 0.293CTH^{*} + 0.282Infor^{*} + 0.292AFS^{*} + 0.291APT^{*} + 0.114TasaActividad^{*} - 0.014TasaParo^{*} + 0.294Ocupados^{*} + 0.291PIB^{*} + 0.018CANE^{*} + 0.292TVF^{*} + 0.172VS^{*}$
+
+```{r, warning=FALSE}
+# Matriz de correlaciones de componentes principales
+fit3 <- PCA(datos_cont, scale.unit = TRUE, ncp = 3, graph = FALSE)
+
+# Autovectores asociados a los autovalores de los componentes principales
+knitr::kable(fit3$svd$V, digits = 3, caption = "Autovectores")
+```
+
+- b. Mostar una tabla con las correlaciones de las Variables con las Componentes Principales. Para cada Componente indicar las variables con las que está más correlacionada 0.5
+
+La primera componente presenta la mayor correlación directa con las variables **NumEmpresas** y **Ocupados** mientras que la mayor correlación inversa la tiene con la variable **Mortalidad**.
+
+La segunda componente presenta la mayor correlación directa con la variable **Natalidad** mientras que la mayor correlación inversa la presenta con la variable **Mortalidad**.
+
+La tercera componente presenta la mayor correlación directa con la variable **CANE** mientras que la mayor correlación inversa la presenta con la variable **TasaActividad**.
+
+```{r}
+var <- get_pca_var(fit3)
+knitr::kable(var$cor, digits = 2, caption = "Correlaciones de las Componentes Principales con las variables")
+```
+
+- c. Comentar los gráficos que representan las variables en los planos formados por las componentes, intentando explicar lo que representa cada componente 1
+
+Los valores representados en el eje de abcisas para la primera componente indican la correlación que tienen las variables con esta componente, de este modo, las variables **NumEmpresas** y **Ocupados** son las que mayor correlación positiva tienen aunque seguidas prácticamente con el mismo valor por las variables **Poblacion**, **Construccion**, **CTH**, **AFS**, **PIB** y **TVF**; esto señala que cuando el valor de esta primera componente aumenta, el valor de las variables tienden a aumentar también. Por contra, el aumento de la componente señala una disminución del valor de la variable **Mortalidad** con la que existe la mayor correlación negativa.
+Los valores representados en el eje de ordenadas para la segunda componente indican la correlación que tienen las variables con esta componente, de esta manera, la variable **Natalidad** es la que mayor correlación positiva tiene y un aumento de la componente se asocia con un aumento de la variable. La variable **Mortalidad** presenta la mayor correlación negativa e indica que un aumento de la componente está asociado a una disminución del valor de la variable.
+
+```{r, warning=FALSE}
+# Representación gráfica componente 1 y componente 2
+fviz_pca_var(fit3, axes = c(1, 2), col.var = "cos2", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+```
+
+Los valores representados en el eje de abcisas se corresponde de nuevo con la primera componente mientras que el eje de ordenadas representa la tercera componente donde destaca la variable **CANE** que es la variable con la que presenta mayor correlación positiva e indica que el aumento de la componente se asocia a un aumento del valor de la variable mientras que la variable **TasaActividad** presenta la mayor correlación negativa de manera que el aumento de la componente está asociado a una disminución del valor de la variable.
+```{r, warning=FALSE}
+# Representación gráfica componente 3
+fviz_pca_var(fit3, axes = c(1, 3), col.var = "cos2", gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+```
+
+- d. Mostrar la tabla y los gráficos que nos muestran la proporción de la varianza de cada variable que es explicado por cada componente. ¿Cuál de las variables es la que está peor explicada? 0.25
+
+La variable peor explicada es **VS** puesto que presenta la menor proporción de la varianza de entre todas las variables con un valor de 0.49 que es la suma de la varianza explicada por cada una de las tres componentes.
+
+```{r}
+# Proporción de la varianza de cada variable que es explicada por cada componente
+knitr::kable(var$cos2, digits = 2, caption = "Cosenos al cuadrado")
+```
+
+En el gráfico se puede apreciar las variables con la mayor propoción de varianza explicada por cada uno de los componentes, de este modo destaca la primera componente como la que más influye sobre mayor cantidad de variables. 
+
+```{r}
+# Representación gráfica de los cosenos
+corrplot(var$cos2, is.corr = FALSE, tl.cex = 0.6, tl.col = "black", cl.ratio = 1)
+```
+
+En el gráfico se observa el total de proporción de variabilidad de cada una de las variables que está representada por las tres componentes. Se puede contrastar como la variable **VS** es la que menor variabilidad está explicada por las componentes de este análisis.
+
+```{r}
+# Variabilidad de cada variable explicada por los tres componentes principales
+fviz_cos2(fit3, choice = "var", axes = 1:3, tl.cex = 0.6)
+```
+
+- e. Mostrar la tabla y los gráficos que nos muestran el porcentaje de la varianza de cada Componente que es debido a cada variable. ¿Que variables contribuyen más a cada Componente? 0.25
+
+A la primera componente contribuye mayormente la variable **Ocupados**, a la segunda componente contribuye mayormente la variable **Mortalidad** y a la tercera componente contribuye más la variable **CANE**.
+
+```{r}
+# Porcentaje de varianza de cada componente explicada por cada variable
+knitr::kable(var$contrib, digits = 2, caption = "Contribuciones")
+```
+
+En el gráfico se observa en qué componentes contribuyen las variables, en términos absolutos destaca la variable **CANE** como la que mayor influye en la varianza de la tercera componente.
+
+```{r}
+# Representación gráfica
+corrplot(var$contrib, is.corr = FALSE, tl.cex = 0.6, tl.col = "black", cl.ratio = 1)
+```
+
+Se muestra un gráfico para la contribución de las variables a cada componente. Para cada gráfico, se pinta una linea roja horizontal discontinua que indica la media de las contribuciones. Las variables por debajo de la línea indican que su contribución a la componente está por debajo de la media total.
+
+```{r}
+# Contribución de las variables a la primera componente
+fviz_contrib(fit3, choice = "var", axes = 1, tl.cex = 0.6)
+
+# Contribución de las variables a la segunda componente
+fviz_contrib(fit3, choice = "var", axes = 2, tl.cex = 0.6)
+
+# Contribución de las variables a la tercera componente
+fviz_contrib(fit3, choice = "var", axes = 3, tl.cex = 0.6)
+```
+
+- f. Sobre los gráficos que representan las observaciones en los nuevos ejes y el gráfico Biplot., teniendo en cuenta la posición de las provincias en el gráfico. Comentar las provincias que tienen una posición más destacada en cada componente, en positivo o negativo, ¿Qué significa esto en términos socioeconómicos para estas provincias? 1
+
+Para la primera componente destaca el valor positivo de Madrid y, para valores negativos existen varias provincias, aunque la provincia con el menor valor es Soria. En término socioeconómicos esto indica que Madrid tiene la mayor cantidad de ocupados, la mayor cantidad de número de empresas de todos los sectores (construcción, comercio, financieras, profesionales y técnicas, industria, de comunicación...), la mayor población, el mayor número de viviendas familiares y el mayor PIB. En la situación socioeconómica de Soria esto quiere decir baja cantidad de ocupados, bajo número de empresas de todos los sectores (construcción, comercio, financieras, profesionales y técnicas, industria, de comunicación...), baja población, bajo número de viviendas familiares, un PIB bajo así como una tasa de mortalidad elevada.
+Para la segunda componente destaca el alto valor que presenta Melilla mientras que el valor más bajo lo presenta Zamora. En términos socioeconómicos esto indica que Melilla presenta una baja tasa de mortalidad, una alta tasa de natalidad y una alta tasa de paro. Para Zamora esto supone una alta tasa de mortalidad, una baja tasa de natalidad y una baja tasa de paro.
+
+```{r, warning=FALSE}
+# Representación gráfica de los individuos
+fviz_pca_ind(fit3, axes = c(1, 2), col.ind = "cos2", col.cex = 0.2, 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+```
+
+Para la tercera componente tenemos que el valor más alto lo presenta Jaén mientras que Baleares presenta el valor más bajo. En términos socioeconómicos esto significa que Jaén presenta una cifra alta en su censo agrario y la tasa de paro es alta. En el caso de Baleares esto supone una baja cifra de su censo agrario y una alta tasa de actividad.
+
+```{r, warning=FALSE}
+# Representación gráfica de los individuos
+fviz_pca_ind(fit3, axes = c(1, 3), col.ind = "cos2", col.cex = 0.2, 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), repel = TRUE)
+```
+
+```{r, warning=FALSE}
+# Biplot
+fviz_pca_biplot(fit3, repel = TRUE, col.var = "#2E9FDF", col.cex = 0.2, col.ind = "#696969")
+```
+
+```{r, warning=FALSE}
+# Biplot
+fviz_pca_biplot(fit3, repel = TRUE, axes = c(1, 3), col.var = "#2E9FDF", col.cex = 0.2, col.ind = "#696969")
+```
+
+- g. Si tuviéramos que construir un índice que valore de forma conjunta el desarrollo económico de una provincia, como se podría construir utilizando una combinación lineal de todas las variables. ¿Cuál sería el valor de dicho índice en Madrid? ¿Cual sería su valor en Melilla? 1
+
+Se podría construir un índice que valore de forma conjunta el desarrollo económico de una provincia multiplicando el valor de cada una de las componentes principales para una determinada provincia por el porcentaje de información que explica esa componente principal.
+
+$X^{Madrid} = 16.778\times63.7\% - 0.366\times14.2\% - 0.849\times9.1\% = 6.74$
+
+$X^{Melilla} = -2.218\times63.7\% + 4.782\times14.2\% - 1.905\times9.1\% = -0.9072$
+
+```{r}
+# Valor de las componentes principales en cada provincia
+ind <- get_pca_ind(fit3)
+knitr::kable(ind$coord, digits = 3, caption = "Valores de las provincias en las componentes principales")
+```
+
+### 4. Representar un mapa de calor de la matriz de datos, estandarizado y sin estandarizar para ver si se detectan inicialmente grupos de provincias. 0.5
+
+En la representación en el mapa de calor con los datos estandarizados se pueden reconocer algunos grupos de provincias donde por una parte destacan Madrid y Barcelona en un grupo, destacando otro grupos de provincias como los de las ciudades autónomas de Ceuta y Melilla u otro grupo, entre otros, definido por las ciudades de Valencia y Alicante.
+
+La representación del mapa de calor de datos no estandarizados solo permite diferenciar en términos de la variable **PIB** estando todas las demás variables poco reconocibles en relación con las provincias. Atendiendo a la variable **PIB** de nuevo destaca la posición de las ciudades de Madrid y Barcelona sobre todas las demás provincias.
+
+```{r}
+# Datos estandarizados
+datos_st <- scale(datos_cont)
+
+# Mapa de calor de datos estandarizados
+heatmaply(as.matrix(datos_st), seriate = "mean", row_dend_left = TRUE, plot_method = "plotly")
+
+# Mapa de calor de datos no estandarizados
+heatmaply(datos_cont, seriate = "mean", row_dend_left = TRUE, plot_method = "plotly")
+```
+
+### 5. Realizar un análisis Jerárquico de clusters para determinar si existen grupos de provincias con comportamiento similar.
+
+- a. A la vista del dendrograma ¿Cuántos clusters recomendarías? 0.5
+
+A la vista del dendograma de valores estandarizados fijando una línea de corte, es razonable recomendar 6 clusters. Se podrían recomendar también 3 clusters pero el número de provincias en algunos clusters aumentaría mucho y los datos entre sus provincias no serían tan homogéneos como en el caso de la creación de los 6 clusters.
+
+```{r, warning=FALSE}
+# Calculo la distancia de los valores sin estandarizar
+d <- dist(datos, method = "euclidean")
+
+# Calculo la distancia de los valores estandarizados
+d_st <- dist(datos_st, method = "euclidean")
+
+# Dendograma de los valores sin estandarizar
+res.hc_d <- hclust(d, method = "ward.D2")
+fviz_dend(res.hc_d, cex = 0.5)
+
+# Dendograma de los valores estandarizados
+res.hc_d_st <- hclust(d_st, method = "ward.D2")
+fviz_dend(res.hc_d_st, cex = 0.5)
+```
+
+Podemos observar el número de provincias que tiene cada uno de los clusters que se han seleccionado.
+
+```{r}
+# Selecciono los 6 clusters
+grp <- cutree(res.hc_d_st, k = 6)
+
+# Tabla con las provincias de cada cluster
+knitr::kable(table(grp), caption = "Número de individuos por cluster")
+```
+
+- b. Representar los individuos agrupados según el número de clusters elegido. 0.5
+
+```{r, warning=FALSE}
+# Represento el dendograma con las provincias agrupadas
+fviz_dend(res.hc_d_st, k = 6, cex = 0.5, k_colors = c("brown", "yellow", "blue", "red", "green", "purple"), 
+          colors_labels_by_k = TRUE, rect = TRUE)
+```
+
+```{r, warning=FALSE}
+# Provincias agrupadas en ejes 1 y 2
+fviz_cluster(list(data = datos_st, cluster = grp), axes = c(1, 2), palette = c("brown", "yellow", "blue", "red", "green", "purple"), ellipse.type = "convex", repel = TRUE, show.clust.cent = FALSE, ggtheme = theme_minimal())
+```
+
+```{r, warning=FALSE}
+# Provincias agrupadas en ejes 1 y 3
+fviz_cluster(list(data = datos_st, cluster = grp), axes = c(1, 3), palette = c("brown", "yellow", "blue", "red", "green", "purple"), ellipse.type = "convex", repel = TRUE, show.clust.cent = FALSE, ggtheme = theme_minimal())
+```
+
+- c. ¿Qué número óptimo de clusters nos indican los criterios Silhouette y de Elbow? 0.5
+
+El método de Silhouette indica 2 clusters como número óptimo de clusters.
+
+```{r}
+# Método de Silhouette
+fviz_nbclust(datos_st, kmeans, method = "silhouette") + labs(subtitle = "Método de Silhouette")
+```
+
+El método de Elbow indica 6 clusters como número óptimo de clusters.
+
+```{r}
+# Método de Elbow
+fviz_nbclust(datos_st, kmeans, method = "wss") + geom_vline(xintercept = 6, linetype = 2) + labs(subtitle = "Método de Elbow")
+```
+
+- d. Con el número de clústeres que nos indica Elbow en el apartado anterior,
+realizar un agrupamiento no jerárquico.
+
+- i. Representar los clústeres formados en los planos de las Componentes
+principales. Relacionar la posición de cada clúster en el plano con lo que
+representa cada componente principal. 0.5
+
+El cluster 4 es el que tiene una posición más destacada en la primera componente en el plano, esta componente representa un alto valor del PIB, una gran cantidad de empresas de diversos sectores y una alta tasa de personas ocupadas. 
+
+La lectura para el análisis de la segunda componente en el plano está invertida 180° por lo que la interpretación se realizaría de manera contraria a como se hizo anteriormente en el análisis de componentes principales; esto quiere decir que el clúster 6 es el que tiene una posición más destacada (en positivo) lo que indica que las provincias que forman este cluster tienen cifras similares en cuanto a alta tasa de paro, baja tasa de mortalidad y alta tasa de natalidad.
+
+El cluster 6 es el que tiene una posición más destaca en la tercera componente en el plano, asociado con una buena cifra en el censo agrario.
+
+```{r}
+RNGkind(sample.kind = "Rejection")
+set.seed(1234)
+
+km.res6 <- kmeans(datos_st, 6)
+
+# Clusters en los planos de las componentes principales
+fviz_cluster(km.res6, datos_st, axes = c(1, 2))
+fviz_cluster(km.res6, datos_st, axes = c(1, 3))
+```
+
+- ii. Evaluar la calidad de los clústers 0.5
+
+Los valores negativos en el gráfico indican que hay provincias que no están correctamente clasificadas. Lo deseable es que el valor de la variable **sil_width** sea lo más parecida posible entre las provincias clasificadas en un mismo cluster. De este modo, el valor de la variable **sil_width** para la provincia de Albacete que está clasificada en el cluster 6, está indicando que no esta correctamente clasificada. En cambio, las provincias de Almería y Badajoz que tienen esos valores de la variable positivo y similares entre sí, están indicando una correcta clasificación de ambas provincias en el cluster. Asimismo, también observamos el número de provincias clasificadas en cada cluster y la media de la variable **sil_width**, parece que aquellos cluster que tienen una media superior en esta variable están indicando una clasificación muy buena de las provincias dentro de ellos.
+
+```{r}
+# Calidad de los clusters
+sil <- silhouette(km.res6$cluster, dist(datos_st))
+rownames(sil) <- rownames(datos)
+head(sil[, 1:3])
+fviz_silhouette(sil)
+```
+
+- e. Explicar las provincias que forman cada uno de los clústeres y comentar cuales son las características socioeconómicas que las hacen pertenecer a dicho clúster. 1
+
+El clúster 1 formado por las provincias vascas, las islas Baleares, las provincias catalanas exceptuando Barcelona, Guadalajara que está próxima a Madrid geográficamente, Navarra, La Rioja y las capitales aragonesa y castellanoleonesa está caracterizado por presentar una baja tasa de paro y una alta tasa de actividad además de una tasa de natalidad alta y una baja tasa de mortalidad en comparación con otras regiones del país.
+
+El clúster 2 formado por Asturias, provincias gallegas (Coruña, Ourense y Lugo), Cuenca, Cáceres y las provincias castellanoleonesas de Zamora y León se caracterizan por presentar la tasa de mortalidad más alta del país y la tasa de natalidad y tasa de actividad más bajas del país.
+
+Los clusters 3 y 4 engloba a las principales ciudades españolas y se caracterizan por tener la mayor población y PIB, las menores tasas de mortalidad, la mayor cantidad de empresas de todos los sectores, las mayores tasas de actividad y mayor cantidad de ocupados, siendo la posición del cluster 4 formado por Madrid y Barcelona mucho más destacada en términos comparativos que la posición del cluster 3 conformado por Valencia, Sevilla, Málaga, Murcia y Alicante.
+
+El clúster 5 formado por el resto de provincias castellanoleaonesas y aragonesas además de Cantabria presenta una de las tasas de mortalidad más altas, una baja natalidad, el menor número de empresas, la menor tasa de paro y menor número de ocupados, el menor PIB y el menor número de viviendas familiares.
+
+El cluster 6 formado por el resto de provincias manchegas, andaluzas, Badajoz, Castellón, las ciudades autónomas de Ceuta y Melilla y las islas Canarias presentan una baja tasa de mortalidad y la tasa de natalidad más alta, el menor IPC, la tasa de paro más elevada del país y una buena cifra en su censo agrario.
+
+```{r, warning=FALSE}
+# Medias de las variables
+EsT_Clus <- aggregate(datos_cont, by = list(km.res6$cluster), mean)
+knitr::kable(EsT_Clus, digits = 2, caption = "Estadísticos de los clusters")
+```
+
+```{r}
+# Provincias ordenadas por cluster
+ordenado <- sort(km.res6$cluster)
+knitr::kable(ordenado, digits = 2, caption = "Provincias y cluster")
+```

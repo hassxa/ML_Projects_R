@@ -1,0 +1,201 @@
+---
+title: "Análisis y predicción de una serie temporal"
+author: "Hassan Chafi Xavier"
+date: "23/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preparación de las herramientas de trabajo
+Como en todo proyecto, lo primero que comenzaré haciendo es cargar las librerías que voy a utilizar y cargar los datos con los que se pretende trabajar.
+
+```{r, warning=FALSE, message=FALSE,results='hide'}
+# Cargo librerías
+library(readxl)
+library(ggplot2)
+library(forecast)
+library(dplyr)
+```
+
+```{r}
+# Lectura del archivo
+datos <- read_xlsx("C:/Users/96has/Documents/NTIC/7. Documentación minería de Datos y Modelización Predictiva - Juana Mª Alonso-20220117/Tarea minería de datos y modelización predictiva - Juana Mª/Evaluacion/PernoctacionesApartTur.xlsx")
+```
+
+### 1. Introducción: Presentación de la serie a analizar. (1)
+La serie que se va a analizar a continuación se corresponde con las pernoctaciones realizadas por ciudadanos tanto nacionales como extranjeros en apartamentos turísticos de todas las localizaciones del territorio nacional español desde enero de 2005 hasta diciembre de 2017 para lo que se tienen el número total de esas pernoctaciones en datos mensuales. Los datos han sido extraídos del Instituto Nacional de Estadística (INE) donde hay disponibles datos referentes al sector servicios en España.
+
+```{r}
+# Representación de la serie
+pernoctaciones <- ts(datos[,-1], start = c(2005, 1), frequency = 12)
+autoplot(pernoctaciones) + ggtitle("Pernoctaciones mensuales en apartamentos turísticos") + xlab("Año") + ylab("Nº de pernoctaciones")
+```
+
+### 2. Representación gráfica y descomposición estacional (si tuviera comportamiento estacional). (1.5)
+La tabla con los coeficientes de estacionalidad que se observan a continuación se interpretan de modo que podemos afirmar que en el mes de agosto se registran un 100% más de pernoctaciones que en la media del año y en el mes de noviembre se registran un 68% de la media del total de pernoctaciones del año (un 32% menos que la media del total de pernoctaciones del año).
+
+```{r}
+# Descomposición estacional de la serie
+pernoctaciones_descomp <- decompose(pernoctaciones, type = c("multiplicative"))
+knitr::kable(pernoctaciones_descomp$figure, digits = 2, caption = "Coeficientes de estacionalidad")
+```
+
+La representación gráfica de la descomposición estacional de la serie según el modelo multiplicativo muestra la tendencia que sigue la serie, el componente estacional y el componente irregular. 
+
+```{r}
+# Representación gráfica de componentes
+autoplot(pernoctaciones_descomp, ts.color = "blue")
+```
+
+Podemos observar también un gráfico donde simultáneamente se representan la serie observada, la tendencia de la serie y la serie con el ajuste estacional para exhibir las variaciones debidas a la época del año.
+
+```{r, warning=FALSE}
+# Representación gráfica de la tendencia y la serie ajustada estacionalmente
+autoplot(pernoctaciones, series = "Datos") + 
+  autolayer(trendcycle(pernoctaciones_descomp), series = "Tendencia") + 
+  autolayer(seasadj(pernoctaciones_descomp), series = "Estacionalmente ajustada") + 
+  xlab("Año") + ylab("Nº de pernoctaciones") + 
+  ggtitle("Pernoctaciones mensuales en apartamentos turísticos") + 
+  scale_colour_manual(values = c("gray", "blue", "red"), 
+                      breaks = c("Datos", "Estacionalmente ajustada", "Tendencia"))
+```
+
+El mes de agosto del año 2017 es el registro donde se alcanzó el mayor número de pernoctaciones en apartamentos turísticos de toda la observación de la serie representada.
+
+```{r}
+# Representación gráfica de los valores para cada año
+ggseasonplot(pernoctaciones, year.labels = TRUE, year.labels.left = TRUE) + 
+  ylab("Nº de pernoctaciones") + ggtitle("Seasonal plot: Pernoctaciones mensuales en apartamentos turísticos")
+```
+
+### 3. Para comprobar la eficacia de los métodos de predicción que vamos a hacer en los siguientes apartados reservamos los últimos datos observados (un periodo en las series estacionales o aproximadamente 10 observaciones) para comparar con las predicciones realizadas por cada uno de los métodos. Luego ajustamos los modelos sobre la serie sin esos últimos datos en los siguientes apartados
+
+```{r}
+# Reservo los datos de los meses correspondientes al último año
+pernoctaciones_reserv <- window(pernoctaciones, end = c(2016, 12))
+```
+
+### 4. Encontrar el modelo de suavizado exponencial más adecuado. Para dicho modelo, representar gráficamente la serie observada y la suavizada con las predicciones para un periodo que se considere adecuado. (2)
+Dado que la serie tiene estacionalidad, el modelo de suavizado exponencial más adecuado será el de Holt-Winters multiplicativo ya que la incidencia de la estacionalidad **NO** aumenta con el tiempo. Se han calculados los intervalos de predicción para unos niveles de confianza del 80% y del 95%. Esto indica que con un 80% de posibilidades los resultados correspondientes a la realidad se encontrarán dentro de la zona azul más intensa en el siguiente gráfico y que con un 95% se encontrará en la zona azul menos intensa en el gráfico. Se han calculado las predicciónes para un año más al último observado en la serie original.
+
+```{r}
+# Modelo de Holt-Winters
+modelo <- hw(pernoctaciones_reserv, seasonal = "multiplicative", level = c(80, 95))
+autoplot(modelo) + xlab("Año") + ylab("Nº de pernoctaciones")
+```
+
+Aquí se representan la serie observada y la serie suavizada por el método de Holt-Winters.
+
+```{r}
+# Representación de la serie observada y la suavizada
+autoplot(pernoctaciones) +
+  autolayer(modelo, series = "Holt Winter", PI = FALSE) +
+  ggtitle("Forecasts from Holt's method") + xlab("Año") + ylab("Nº de pernoctaciones") +
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+A continuación, se pueden observar las predicciones exactamente cuantificadas junto con el intervalo de predicción.
+
+```{r}
+# Las predicciones que arroja el modelo
+print(modelo)
+```
+
+También se pueden obtener los parámetros del modelo ajustado. Donde:
+
+- $L_{t}=\alpha\frac{x_{t}}{S_{t-s}}+(1-\alpha)(L_{t-1}+b_{t-1})$
+- $b_{t}=\beta(L_{t}-L_{t-1})+(1-\beta)b_{t-1}$
+- $S_{t}=\gamma\frac{x_{t}}{L_{t}}+(1-\gamma)S_{t-s}$
+- $\hat{x}_{t+1}=(L_{t}+b_{t})S_{t+1-s}$
+
+```{r}
+# Parámetros del modelo ajustado
+knitr::kable(modelo$model$par, format = "pipe", digits = 4, caption = "Estimadores de los parámetros")
+```
+
+### 5. Representar la serie y los correlogramas. Decidir que modelo puede ser ajustado. Ajustar el modelo adecuado comprobando que sus residuales están incorrelados. (Sintaxis, tablas de los parámetros estimados y gráficos) (3)
+
+Tal y como se puede comprobar en el autocorrelograma simple de la serie se observa un comportamiento estacional ya que se ve un comportamiento que se repite en un periodo de tiempo de 12 meses así como la no estacionariedad en media ya que el correlograma decrece lentamente, la serie no parece que presente problemas en cuanto a su variabilidad.
+
+```{r}
+# Serie observada exceptuano el último año
+autoplot(pernoctaciones_reserv) + ggtitle("Pernoctaciones mensuales en apartamentos turísticos") + xlab("Año") + ylab("Nº de pernoctaciones")
+
+# Autocorrelograma simple
+ggAcf(pernoctaciones_reserv, lag = 48)
+
+# Autocorrelograma parcial
+ggPacf(pernoctaciones_reserv, lag = 48)
+```
+
+Para obtener el mejor modelo para su ajuste se hace uso de la función auto.arima. La función da como resultado que el modelo a ajustar es el siguiente:  $ARIMA(0, 1, 1)(0, 1, 1)_{12}$
+
+Se puede afirmar que los residuales del modelo están incorrelados ya que el p-valor del contraste de Ljung-Box devuelve un valor 0,09851 que es mayor que el nivel de significación de 0,05 y, por tanto, se acepta la hipotesis de la incorrelación de los residuales. Asimismo, en el autocorrelograma simple casi todas las barras están dentro de las bandas de confianza calculadas con un 95% de probabilidad.
+
+```{r}
+# Uso de la función auto.arima para ajustar el mejor modelo
+fitPernoctaciones1 <- auto.arima(pernoctaciones_reserv, seasonal = TRUE)
+checkresiduals(fitPernoctaciones1)
+```
+
+Se puede probar un nuevo modelo añadiendo, por ejemplo, valores de autorregresivos en la parte regular y en la parte estacional, por ejemplo: $ARIMA(1, 1, 1)(1, 1, 1)_{12}$
+
+En este caso, se observa que los residuales del modelo están incorrelados puesto que el contraste de Ljung-Box devuelve un p-valor de 0,07636 y mayor al nivel de significación de 0,05.
+
+```{r}
+# Un segundo modelo
+fitPernoctaciones2 <- Arima(pernoctaciones_reserv, order = c(1,1,1), seasonal = c(1,1,1))
+checkresiduals(fitPernoctaciones2)
+```
+
+Se pueden comparar los dos modelos para comprobar cuál de los dos tienen un menor valor de los criterios de información, esto es, un menor valor en AIC y BIC. Tal y como se comprueba a continuación, el primer modelo es el que menor valor tiene en los criterios de información y será el que finalmente se ajuste.
+
+```{r}
+print(fitPernoctaciones1)
+print(fitPernoctaciones2)
+```
+
+Por tanto, se ajustará el modelo obtenido de manera automática mediante la función **auto.arima** y que se trata de: $ARIMA(0, 1, 1)(0, 1, 1)_{12}$
+
+```{r}
+# Valores estimados para el modelo ARIMA
+print(fitPernoctaciones1)
+```
+
+### 6. Escribir la expresión algebraica del modelo ajustado con los parámetros estimados. (1)
+
+La expresión algebráica del modelo ajustado es: $(1 - B^{12})(1 - B)X_{t} = (1 + \Theta_{1}B^{12})(1 + \theta_{1}B)Z_{t}$
+
+La expresión algebráica del modelo ajustado con los parámetros estimados es: $(1 - B^{12})(1 - B)X_{t} = (1 - 0,6774B^{12})(1 - 0,5007B)Z_{t}$
+
+### 7. Calcular las predicciones y los intervalos de confianza para las unidades de tiempo que se considere oportuno, dependiendo de la serie, siguientes al último valor observado. Representarlas gráficamente. (1)
+
+```{r}
+# Predicciones para 12 meses 
+autoplot(forecast(fitPernoctaciones1, h = 12)) +
+  ggtitle("Predicción con el modelo ajustado") + xlab("Año") + ylab("Nº de pernoctaciones")
+knitr::kable(forecast(fitPernoctaciones1, h = 12), digits = 2, caption = "Predicciones")
+```
+
+### 8. Comparar las predicciones obtenidas con cada uno de los métodos con los valores observados que habíamos reservado antes. Conclusiones. (0.5)
+
+A continuación se representan la serie observada, la serie de la predicción realizada con la función **auto.arima** y la serie obtenida añadiendo valores en los autorregresivos y medias moviles de la parte regular y la parte estacional a partir del modelo anterior. El modelo que se ha decidido finalmente ajustar es el modelo obtenido con la función **auto.arima** que tiene sus valores residuales incorrelados. Se observa que los valores observados que se habían reservado anteriormente, se encuentran dentro del intervalo de predicción que proporciona el modelo que finalmente se ha ajustado y que en el gráfico se corresponde con la serie roja.
+
+```{r}
+# Comparaciones
+autoplot(pernoctaciones) + 
+  autolayer(forecast(fitPernoctaciones1, h = 12), series = "Automatico", PI = FALSE) + 
+  autolayer(forecast(fitPernoctaciones2, h = 12), series = "Manual", PI = FALSE) +
+  ggtitle("Predicciones con distintos modelos") + xlab("Año") + ylab("Nº de pernoctaciones") + 
+  guides(colour = guide_legend(title = "Forecast"))
+```
+
+
+
+
+
+
+
